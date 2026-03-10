@@ -25,6 +25,7 @@ TS_MODEL_ID_RE = re.compile(r'^\s*"(?P<id>grok-[^"]+)"\s*:\s*{', re.MULTILINE)
 REMOVED_IDENTIFIERS = (
     "grok-3-fast",
     "grok-4-fast",
+    "grok-4-mini",
     "grok-4-mini-thinking-tahoe",
     "grok-4.1",
 )
