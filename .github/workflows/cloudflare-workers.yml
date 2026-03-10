@@ -2,21 +2,9 @@ name: Deploy to Cloudflare Workers
 
 on:
   workflow_dispatch:
-    inputs:
-      deploy_target:
-        description: "Deployment target"
-        type: choice
-        required: true
-        default: cloudflare
-        options:
-          - cloudflare
-          - docker
-          - both
   push:
     branches:
       - main
-    tags:
-      - "v*"
 
 permissions:
   contents: read
@@ -37,7 +25,7 @@ jobs:
         run: python scripts/check_model_catalog_sync.py
 
   deploy-cloudflare:
-    if: ${{ (github.event_name == 'workflow_dispatch' && (github.event.inputs.deploy_target == 'cloudflare' || github.event.inputs.deploy_target == 'both')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
     needs: validate-model-catalog
     runs-on: ubuntu-latest
     steps:
@@ -71,7 +59,7 @@ jobs:
           import os
           import re
           import urllib.request
-          
+
           token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
           account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
           build_sha = os.environ.get("GITHUB_SHA", "") or ""
@@ -88,18 +76,18 @@ jobs:
               return m.group(1).strip() if m and m.group(1).strip() else fallback
 
           worker_name = extract(r'(?m)^name\s*=\s*"([^"]+)"\s*$', "grok2api")
-          
+
           kv_title = f"{worker_name}-cache"
           kv_base = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/storage/kv/namespaces"
           print(f"Ensuring KV namespace: {kv_title}", flush=True)
-          
+
           def request(method: str, url: str, data=None):
               headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
               body = None if data is None else json.dumps(data).encode("utf-8")
               req = urllib.request.Request(url, data=body, headers=headers, method=method)
               with urllib.request.urlopen(req) as resp:
                   return json.loads(resp.read().decode("utf-8"))
-          
+
           # === Ensure KV namespace ===
           kv_id = None
           page = 1
@@ -118,7 +106,7 @@ jobs:
               if page >= int(info.get("total_pages") or 1):
                   break
               page += 1
-          
+
           if not kv_id:
               print("KV namespace not found; creating...", flush=True)
               res = request("POST", kv_base, {"title": kv_title})
@@ -201,7 +189,7 @@ jobs:
                   'wrangler.ci.toml: missing required [placement] region = "aws:us-east-1"'
               )
           def normalize_dir(v: str) -> str:
-              s = (v or "").strip().replace("\\\\", "/")
+              s = (v or "").strip().replace("\\", "/")
               while s.startswith("./"):
                   s = s[2:]
               s = s.rstrip("/")
@@ -240,97 +228,3 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-  build-docker:
-    if: ${{ (github.event_name == 'workflow_dispatch' && (github.event.inputs.deploy_target == 'docker' || github.event.inputs.deploy_target == 'both')) || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) }}
-    needs: validate-model-catalog
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    env:
-      REGISTRY: ghcr.io
-      IMAGE_NAME: ${{ github.repository }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            suffix: amd64
-          - platform: linux/arm64
-            suffix: arm64
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}},suffix=-${{ matrix.suffix }}
-            type=raw,value=latest-${{ matrix.suffix }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: ${{ matrix.platform }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.suffix }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
-          pull: true
-
-  merge-docker-manifests:
-    if: ${{ (github.event_name == 'workflow_dispatch' && (github.event.inputs.deploy_target == 'docker' || github.event.inputs.deploy_target == 'both')) || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) }}
-    runs-on: ubuntu-latest
-    needs: build-docker
-    permissions:
-      contents: read
-      packages: write
-    env:
-      REGISTRY: ghcr.io
-      IMAGE_NAME: ${{ github.repository }}
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest
-
-      - name: Create and push manifest
-        run: |
-          TAGS="${{ steps.meta.outputs.tags }}"
-          for tag in $TAGS; do
-            echo "合并标签: $tag"
-            docker buildx imagetools create -t $tag \
-              ${tag}-amd64 \
-              ${tag}-arm64
-          done

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 
 <head>
@@ -28,6 +28,7 @@
         <div>
           <h2 class="text-2xl font-semibold tracking-tight">Token 列表</h2>
           <p class="text-[var(--accents-4)] mt-1 text-sm">管理 Grok2API 的 Token 服务号池。</p>
+          <p class="text-[var(--accents-5)] mt-1 text-xs">NSFW 操作已在 Token 管理页启用；Cloudflare Worker 会自动按每批 20 个 Token 分段处理。</p>
         </div>
         <div class="flex items-center gap-3 w-full sm:w-auto">
           <button onclick="openImportModal()" class="geist-button-outline gap-2">
@@ -39,13 +40,13 @@
             </svg>
             导入
           </button>
-          <button id="btn-refresh-nsfw-all" onclick="refreshAllNsfw()" class="geist-button-outline gap-2 hidden">
+          <button id="btn-refresh-nsfw-all" onclick="handleTokenNsfwAction(false)" class="geist-button-outline gap-2" title="为当前 Token 池分批执行 NSFW 开启">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 4 23 10 17 10"></polyline>
               <polyline points="1 20 1 14 7 14"></polyline>
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
             </svg>
-            一键刷新 NSFW
+            全量开启 NSFW
           </button>
           <button onclick="addToken()" class="geist-button gap-2">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -178,6 +179,10 @@
       <button id="btn-batch-update" onclick="batchUpdate()"
         class="geist-button-outline text-xs px-3 gap-1 border-0 hover:bg-gray-100 justify-center">
         刷新
+      </button>
+      <button id="btn-batch-nsfw" onclick="handleTokenNsfwAction(true)"
+        class="geist-button-outline text-xs px-3 gap-1 border-0 hover:bg-gray-100 justify-center">
+        NSFW
       </button>
       <button id="btn-batch-delete" onclick="batchDelete()" class="geist-button-danger text-xs px-3">
         删除
@@ -363,6 +368,160 @@
   <script src="/static/common/footer.js?v=1"></script>
   <script src="/static/common/toast.js"></script>
   <script src="/static/token/token.js?v=15"></script>
+  <script>
+    const NSFW_UI_BATCH_LIMIT = 20;
+
+    function forceEnableTokenNsfwButtons() {
+      ['btn-refresh-nsfw-all', 'btn-batch-nsfw'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.remove('hidden');
+        el.style.setProperty('display', 'inline-flex', 'important');
+      });
+    }
+
+    function normalizeTokenForNsfw(value) {
+      if (typeof normalizeSsoToken === 'function') {
+        return normalizeSsoToken(value);
+      }
+      const raw = String(value || '').trim();
+      return raw.startsWith('sso=') ? raw.slice(4).trim() : raw;
+    }
+
+    function collectNsfwTargetTokens(selectedOnly) {
+      const rows = Array.isArray(flatTokens) ? flatTokens : [];
+      const source = selectedOnly ? rows.filter((item) => item && item._selected) : rows;
+      const seen = new Set();
+      const tokens = [];
+      source.forEach((item) => {
+        const token = normalizeTokenForNsfw(item && item.token);
+        if (!token || seen.has(token)) return;
+        seen.add(token);
+        tokens.push(token);
+      });
+      return tokens;
+    }
+
+    async function confirmNsfwAction(message, okText) {
+      if (typeof confirmAction === 'function') {
+        return confirmAction(message, { okText });
+      }
+      return window.confirm(message);
+    }
+
+    async function runNsfwBatches(tokens, buttonId) {
+      const uniqueTokens = Array.from(new Set((tokens || []).map(normalizeTokenForNsfw).filter(Boolean)));
+      if (!uniqueTokens.length) {
+        if (typeof showToast === 'function') showToast('没有可处理的 Token', 'error');
+        return;
+      }
+      if (!apiKey) {
+        if (typeof showToast === 'function') showToast('管理员会话已失效，请重新登录', 'error');
+        return;
+      }
+
+      const btn = document.getElementById(buttonId);
+      const originalHtml = btn ? btn.innerHTML : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '处理中...';
+      }
+
+      let success = 0;
+      let failed = 0;
+      const failedTokens = [];
+
+      try {
+        for (let i = 0; i < uniqueTokens.length; i += NSFW_UI_BATCH_LIMIT) {
+          const chunk = uniqueTokens.slice(i, i + NSFW_UI_BATCH_LIMIT);
+          if (btn) {
+            btn.innerHTML = `NSFW ${Math.min(i + chunk.length, uniqueTokens.length)}/${uniqueTokens.length}`;
+          }
+
+          const headers = typeof buildAuthHeaders === 'function'
+            ? buildAuthHeaders(apiKey)
+            : { Authorization: `Bearer ${apiKey}` };
+          const response = await fetch('/api/v1/admin/tokens/nsfw/enable', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...headers,
+            },
+            body: JSON.stringify({
+              tokens: chunk,
+              concurrency: Math.min(3, chunk.length),
+              retries: 1,
+            }),
+          });
+
+          const payload = typeof parseJsonSafely === 'function'
+            ? await parseJsonSafely(response)
+            : await response.json().catch(() => null);
+
+          if (!response.ok) {
+            const message = typeof extractApiErrorMessage === 'function'
+              ? extractApiErrorMessage(payload, `第 ${Math.floor(i / NSFW_UI_BATCH_LIMIT) + 1} 批处理失败`)
+              : `第 ${Math.floor(i / NSFW_UI_BATCH_LIMIT) + 1} 批处理失败`;
+            throw new Error(message);
+          }
+
+          const summary = payload && payload.summary ? payload.summary : {};
+          success += Number(summary.success || 0);
+          failed += Number(summary.failed || 0);
+          if (Array.isArray(payload && payload.failed)) {
+            payload.failed.forEach((item) => {
+              if (item && item.token) failedTokens.push(String(item.token));
+            });
+          }
+        }
+
+        const failedPreview = failedTokens.length
+          ? `，失败 Token：${failedTokens.slice(0, 5).join('、')}${failedTokens.length > 5 ? ' 等' : ''}`
+          : '';
+        if (typeof showToast === 'function') {
+          showToast(
+            `NSFW 处理完成：总计 ${uniqueTokens.length}，成功 ${success}，失败 ${failed}${failedPreview}`,
+            failed > 0 ? 'info' : 'success',
+          );
+        }
+        if (typeof loadData === 'function') loadData();
+      } catch (error) {
+        if (typeof showToast === 'function') {
+          showToast(`NSFW 处理失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = originalHtml;
+        }
+      }
+    }
+
+    async function handleTokenNsfwAction(selectedOnly) {
+      const tokens = collectNsfwTargetTokens(Boolean(selectedOnly));
+      if (!tokens.length) {
+        if (typeof showToast === 'function') {
+          showToast(selectedOnly ? '请先勾选要处理的 Token' : '当前没有可处理的 Token', 'error');
+        }
+        return;
+      }
+
+      const scopeText = selectedOnly ? `选中的 ${tokens.length} 个 Token` : `全部 ${tokens.length} 个 Token`;
+      const ok = await confirmNsfwAction(
+        `将为${scopeText}依次执行：同意协议 + 设置年龄 + 开启 NSFW。Cloudflare Worker 会自动按每批 ${NSFW_UI_BATCH_LIMIT} 个 Token 分段处理，是否继续？`,
+        '开始处理',
+      );
+      if (!ok) return;
+
+      await runNsfwBatches(tokens, selectedOnly ? 'btn-batch-nsfw' : 'btn-refresh-nsfw-all');
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', forceEnableTokenNsfwButtons);
+    } else {
+      forceEnableTokenNsfwButtons();
+    }
+  </script>
 </body>
 
 </html>
