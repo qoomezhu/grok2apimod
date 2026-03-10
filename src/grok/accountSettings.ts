@@ -29,6 +29,10 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
+function toRequestBody(bytes: Uint8Array): ArrayBuffer {
+  return Uint8Array.from(bytes).buffer;
+}
+
 function grpcHeaders(args: {
   settings: GrokSettings;
   pathname: string;
@@ -129,7 +133,7 @@ export async function acceptTos(tokenRaw: string, settings: GrokSettings): Promi
       origin: "https://accounts.x.ai",
       referer: "https://accounts.x.ai/accept-tos",
     }),
-    body: encodeGrpcWebPayload(new Uint8Array([0x10, 0x01])),
+    body: toRequestBody(encodeGrpcWebPayload(new Uint8Array([0x10, 0x01]))),
   });
   return ensureGrpcSuccess(response, "accept_tos");
 }
@@ -173,8 +177,10 @@ export async function enableNsfwContent(
       origin: "https://grok.com",
       referer: "https://grok.com/?_s=data",
     }),
-    body: hexToBytes(
-      "00000000200a021001121a0a18616c776179735f73686f775f6e7366775f636f6e74656e74",
+    body: toRequestBody(
+      hexToBytes(
+        "00000000200a021001121a0a18616c776179735f73686f775f6e7366775f636f6e74656e74",
+      ),
     ),
   });
   return ensureGrpcSuccess(response, "enable_nsfw");

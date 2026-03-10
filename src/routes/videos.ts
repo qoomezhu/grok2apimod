@@ -345,7 +345,16 @@ videoRoutes.post("/videos", async (c) => {
     if (!body || typeof body !== "object") {
       return c.json(openAiError("Request body must be a JSON object", "invalid_request_error"), 400);
     }
-    return handleVideoCreate(c, body as Record<string, unknown>);
+    const payload = body as Record<string, unknown>;
+    return handleVideoCreate(c, {
+      prompt: payload.prompt,
+      model: payload.model,
+      size: payload.size,
+      seconds: payload.seconds,
+      quality: payload.quality,
+      image_reference: payload.image_reference,
+      input_reference: null,
+    });
   }
 
   const form = await c.req.formData();
