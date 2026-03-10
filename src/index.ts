@@ -3,6 +3,8 @@ import type { Env } from "./env";
 import { openAiRoutes } from "./routes/openai";
 import { mediaRoutes } from "./routes/media";
 import { adminRoutes } from "./routes/admin";
+import { accountSettingsRoutes } from "./routes/accountSettings";
+import { videoRoutes } from "./routes/videos";
 import { runKvDailyClear } from "./kv/cleanup";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -45,7 +47,7 @@ async function fetchAsset(c: any, pathname: string): Promise<Response> {
   if (!assets) {
     console.error("ASSETS binding missing: check wrangler.toml assets binding");
     return assetFetchError(
-      'Internal Server Error: missing ASSETS binding. Check `wrangler.toml` `assets = { directory = \"./app/static\", binding = \"ASSETS\" }` and redeploy.',
+      'Internal Server Error: missing ASSETS binding. Check `wrangler.toml` `assets = { directory = "./app/static", binding = "ASSETS" }` and redeploy.',
       buildSha,
     );
   }
@@ -82,7 +84,9 @@ app.onError((err, c) => {
 });
 
 app.route("/v1", openAiRoutes);
+app.route("/v1", videoRoutes);
 app.route("/", mediaRoutes);
+app.route("/", accountSettingsRoutes);
 app.route("/", adminRoutes);
 
 // Backward-compatible local-cache viewer URLs used by the multi-page admin UI.

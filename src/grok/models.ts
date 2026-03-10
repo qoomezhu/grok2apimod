@@ -57,17 +57,6 @@ export const MODEL_CONFIG: Record<string, ModelInfo> = {
     supported_max_output_tokens: 131072,
     default_top_p: 0.95,
   },
-  "grok-4-mini": {
-    grok_model: ["grok-4-mini", "MODEL_MODE_GROK_4_MINI_THINKING"],
-    rate_limit_model: "grok-4-mini",
-    display_name: "Grok 4 Mini",
-    description: "Grok 4 mini thinking model",
-    raw_model_path: "xai/grok-4-mini",
-    default_temperature: 1.0,
-    default_max_output_tokens: 8192,
-    supported_max_output_tokens: 131072,
-    default_top_p: 0.95,
-  },
   "grok-4-thinking": {
     grok_model: ["grok-4", "MODEL_MODE_GROK_4_THINKING"],
     rate_limit_model: "grok-4",
@@ -200,4 +189,3 @@ export function toGrokModel(model: string): { grokModel: string; mode: string; i
 export function toRateLimitModel(model: string): string {
   return MODEL_CONFIG[model]?.rate_limit_model ?? model;
 }
-

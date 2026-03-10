@@ -134,6 +134,15 @@ export async function updateTokenTags(db: Env["DB"], token: string, token_type: 
   ]);
 }
 
+export async function addTokenTag(db: Env["DB"], token: string, tag: string): Promise<void> {
+  const normalizedTag = String(tag || "").trim();
+  if (!normalizedTag) return;
+  const row = await dbFirst<{ tags: string }>(db, "SELECT tags FROM tokens WHERE token = ?", [token]);
+  const merged = new Set(parseTags(row?.tags ?? "[]"));
+  merged.add(normalizedTag);
+  await dbRun(db, "UPDATE tokens SET tags = ? WHERE token = ?", [JSON.stringify([...merged].sort()), token]);
+}
+
 export async function updateTokenNote(db: Env["DB"], token: string, token_type: TokenType, note: string): Promise<void> {
   await dbRun(db, "UPDATE tokens SET note = ? WHERE token = ? AND token_type = ?", [note.trim(), token, token_type]);
 }
