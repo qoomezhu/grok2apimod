@@ -7,9 +7,14 @@ let pageSize = 50;
 let currentJobId = null;
 let currentJobKind = '';
 let jobPollTimer = null;
+let currentJobQueue = [];
+let currentJobTotal = 0;
+let currentJobProcessedBase = 0;
+let currentJobSummary = { success: 0, failed: 0 };
 
 const FILTERS = ['all', 'active', 'cooling', 'exhausted', 'invalid', 'disabled', 'nsfw', 'no-nsfw'];
 const PAGE_SIZES = [20, 50, 100, 200];
+const JOB_LIMITS = { refresh: 100, nsfw: 60 };
 
 function normalizeSsoToken(token) {
   const value = String(token || '').trim();
@@ -39,6 +44,12 @@ function escapeHtml(text) {
     .replace(/'/g, '&#039;');
 }
 
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
 function getSelectedRows() {
   return tokenRows.filter((row) => row._selected);
 }
@@ -61,11 +72,7 @@ function getPaginationData() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   if (currentPage > totalPages) currentPage = totalPages;
   const start = (currentPage - 1) * pageSize;
-  return {
-    filtered,
-    totalPages,
-    visible: filtered.slice(start, start + pageSize),
-  };
+  return { filtered, totalPages, visible: filtered.slice(start, start + pageSize) };
 }
 
 function updateCounters() {
@@ -122,11 +129,10 @@ function renderSelectionState() {
     selectAll.checked = allVisibleSelected;
     selectAll.indeterminate = !allVisibleSelected && visible.some((row) => row._selected);
   }
-
   ['btn-batch-export', 'btn-batch-refresh', 'btn-batch-disable', 'btn-batch-enable', 'btn-batch-nsfw', 'btn-batch-delete']
     .forEach((id) => {
       const btn = document.getElementById(id);
-      if (btn) btn.disabled = selectedCount === 0 || Boolean(currentJobId);
+      if (btn) btn.disabled = selectedCount === 0 || Boolean(currentJobId) || currentJobQueue.length > 0;
     });
 }
 
@@ -171,11 +177,11 @@ function renderTable() {
         </div>
       </td>`;
 
-    tr.querySelector('input[type="checkbox"]').addEventListener('change', () => {
-      row._selected = !row._selected;
-      renderSelectionState();
+    tr.querySelector('input[type="checkbox"]').addEventListener('change', () => { row._selected = !row._selected; renderSelectionState(); });
+    tr.querySelector('[data-copy="1"]').addEventListener('click', async () => {
+      await navigator.clipboard.writeText(row.token);
+      showToast('已复制', 'success');
     });
-    tr.querySelector('[data-copy="1"]').addEventListener('click', () => navigator.clipboard.writeText(row.token));
     tr.querySelector('[data-act="refresh"]').addEventListener('click', () => refreshSingleToken(row.token));
     tr.querySelector('[data-act="nsfw"]').addEventListener('click', () => enableSingleTokenNsfw(row.token));
     tr.querySelector('[data-act="toggle"]').addEventListener('click', () => toggleSingleTokenStatus(row));
@@ -189,27 +195,14 @@ function renderTable() {
 }
 
 function renderStatusBadge(row) {
-  const map = {
-    active: 'badge-green',
-    cooling: 'badge-orange',
-    exhausted: 'badge-orange',
-    invalid: 'badge-red',
-    disabled: 'badge-gray',
-  };
-  const textMap = {
-    active: '活跃',
-    cooling: '冷却',
-    exhausted: '耗尽',
-    invalid: '失效',
-    disabled: '禁用',
-  };
+  const map = { active: 'badge-green', cooling: 'badge-orange', exhausted: 'badge-orange', invalid: 'badge-red', disabled: 'badge-gray' };
+  const textMap = { active: '活跃', cooling: '冷却', exhausted: '耗尽', invalid: '失效', disabled: '禁用' };
   return `<span class="badge ${map[row.status] || 'badge-gray'}">${textMap[row.status] || row.status}</span>`;
 }
 
 function renderTagBadges(row) {
   const tags = Array.isArray(row.tags) ? row.tags : [];
-  const pills = [];
-  pills.push(`<span class="badge ${row.nsfw_enabled ? 'badge-green' : 'badge-gray'}">${row.nsfw_enabled ? 'NSFW' : '未开启'}</span>`);
+  const pills = [`<span class="badge ${row.nsfw_enabled ? 'badge-green' : 'badge-gray'}">${row.nsfw_enabled ? 'NSFW' : '未开启'}</span>`];
   tags.filter((tag) => tag !== 'nsfw').forEach((tag) => pills.push(`<span class="badge badge-gray">${escapeHtml(tag)}</span>`));
   return `<div class="flex flex-wrap items-center gap-1">${pills.join('')}</div>`;
 }
@@ -268,19 +261,16 @@ function toggleSelectAll() {
 
 function selectVisible() {
   getPaginationData().visible.forEach((row) => { row._selected = true; });
-  renderSelectionState();
   renderTable();
 }
 
 function selectFiltered() {
   getFilteredRows().forEach((row) => { row._selected = true; });
-  renderSelectionState();
   renderTable();
 }
 
 function clearSelection() {
   tokenRows.forEach((row) => { row._selected = false; });
-  renderSelectionState();
   renderTable();
 }
 
@@ -367,88 +357,122 @@ async function enableSingleTokenNsfw(token) {
   await loadData();
 }
 
-async function startAsyncJob(kind, endpoint, body) {
-  if (currentJobId) return showToast('已有任务在执行中', 'info');
+async function startChunkedJob(kind, endpoint, tokens) {
+  if (currentJobId || currentJobQueue.length) return showToast('已有任务在执行中', 'info');
+  const uniqueTokens = [...new Set(tokens.map(normalizeSsoToken).filter(Boolean))];
+  if (!uniqueTokens.length) return showToast('没有可处理的 Token', 'error');
+  const limit = JOB_LIMITS[kind];
+  currentJobQueue = chunkArray(uniqueTokens, limit);
+  currentJobKind = kind;
+  currentJobTotal = uniqueTokens.length;
+  currentJobProcessedBase = 0;
+  currentJobSummary = { success: 0, failed: 0 };
+  await launchNextChunk(endpoint);
+}
+
+async function launchNextChunk(endpoint) {
+  clearTimeout(jobPollTimer);
+  if (!currentJobQueue.length) {
+    const label = currentJobKind === 'nsfw' ? 'NSFW' : '刷新';
+    showToast(`${label}完成：成功 ${currentJobSummary.success}，失败 ${currentJobSummary.failed}`, currentJobSummary.failed > 0 ? 'info' : 'success');
+    resetJobState();
+    await loadData();
+    return;
+  }
+
+  const chunk = currentJobQueue[0];
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(apiKey) },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ tokens: chunk }),
   });
   const json = await parseJsonSafely(res);
-  if (!res.ok || json?.status !== 'success') return showToast(extractApiErrorMessage(json, '启动任务失败'), 'error');
+  if (!res.ok || json?.status !== 'success') {
+    showToast(extractApiErrorMessage(json, '启动任务失败'), 'error');
+    resetJobState();
+    return;
+  }
   currentJobId = json.task_id;
-  currentJobKind = kind;
-  renderJobProgress({ processed: 0, total: json.total || 0, status: 'queued', success: 0, failed: 0 });
-  pollJob();
+  renderJobProgress({ processed: 0, total: currentJobTotal, status: 'queued', success: currentJobSummary.success, failed: currentJobSummary.failed });
+  pollJob(endpoint);
 }
 
 function renderJobProgress(job) {
   const wrap = document.getElementById('batch-progress');
   const text = document.getElementById('batch-progress-text');
-  if (!currentJobId || !job) {
+  if ((!currentJobId && !currentJobQueue.length) || !job) {
     wrap.classList.add('hidden');
     return;
   }
-  const total = Number(job.total || 0);
-  const processed = Number(job.processed || 0);
+  const processed = currentJobProcessedBase + Number(job.processed || 0);
+  const total = currentJobTotal || Number(job.total || 0);
   const percent = total ? Math.floor((processed / total) * 100) : 0;
   text.innerText = `${currentJobKind === 'nsfw' ? 'NSFW' : '刷新'} ${processed}/${total} (${percent}%)`;
   wrap.classList.remove('hidden');
   renderSelectionState();
 }
 
-async function pollJob() {
+async function pollJob(endpoint) {
   clearTimeout(jobPollTimer);
   if (!currentJobId) return;
   const res = await fetch(`/api/v1/admin/jobs/${currentJobId}`, { headers: buildAuthHeaders(apiKey) });
   const json = await parseJsonSafely(res);
   if (!res.ok || !json?.success) {
     showToast(extractApiErrorMessage(json, '读取任务失败'), 'error');
-    finishJobPolling();
+    resetJobState();
     return;
   }
   const job = json.data;
   renderJobProgress(job);
   if (job.status === 'completed') {
     const summary = job.result?.summary || {};
-    showToast(`${currentJobKind === 'nsfw' ? 'NSFW' : '刷新'}完成：成功 ${summary.success || 0}，失败 ${summary.failed || 0}`, (summary.failed || 0) > 0 ? 'info' : 'success');
-    finishJobPolling();
-    await loadData();
+    currentJobProcessedBase += Number(summary.processed || 0);
+    currentJobSummary.success += Number(summary.success || 0);
+    currentJobSummary.failed += Number(summary.failed || 0);
+    currentJobQueue.shift();
+    currentJobId = null;
+    await launchNextChunk(endpoint);
     return;
   }
   if (job.status === 'failed') {
     showToast(job.error || '任务失败', 'error');
-    finishJobPolling();
+    resetJobState();
     await loadData();
     return;
   }
   if (job.status === 'cancelled') {
     showToast('任务已取消', 'info');
-    finishJobPolling();
+    resetJobState();
     await loadData();
     return;
   }
-  jobPollTimer = setTimeout(pollJob, 1200);
+  jobPollTimer = setTimeout(() => pollJob(endpoint), 1200);
 }
 
-function finishJobPolling() {
+function resetJobState() {
   currentJobId = null;
   currentJobKind = '';
+  currentJobQueue = [];
+  currentJobTotal = 0;
+  currentJobProcessedBase = 0;
+  currentJobSummary = { success: 0, failed: 0 };
   clearTimeout(jobPollTimer);
   renderJobProgress(null);
   renderSelectionState();
 }
 
 async function cancelCurrentJob() {
-  if (!currentJobId) return;
-  await fetch(`/api/v1/admin/jobs/${currentJobId}/cancel`, { method: 'POST', headers: buildAuthHeaders(apiKey) });
+  if (currentJobId) {
+    await fetch(`/api/v1/admin/jobs/${currentJobId}/cancel`, { method: 'POST', headers: buildAuthHeaders(apiKey) });
+  }
+  currentJobQueue = [];
   showToast('已请求取消任务', 'info');
 }
 
 function batchRefresh() {
   const selected = getSelectedRows();
   if (!selected.length) return showToast('请先选择 Token', 'error');
-  startAsyncJob('refresh', '/api/v1/admin/tokens/refresh/async', { tokens: selected.map((row) => row.token) });
+  startChunkedJob('refresh', '/api/v1/admin/tokens/refresh/async', selected.map((row) => row.token));
 }
 
 async function batchNsfw() {
@@ -456,13 +480,13 @@ async function batchNsfw() {
   if (!selected.length) return showToast('请先选择 Token', 'error');
   const ok = await confirmAction(`将为选中的 ${selected.length} 个 Token 分批执行 NSFW 开启，是否继续？`, '开始');
   if (!ok) return;
-  startAsyncJob('nsfw', '/api/v1/admin/tokens/nsfw/enable/async', { tokens: selected.map((row) => row.token) });
+  startChunkedJob('nsfw', '/api/v1/admin/tokens/nsfw/enable/async', selected.map((row) => row.token));
 }
 
 async function startAllNsfw() {
-  const ok = await confirmAction(`将为当前 Token 池的 ${tokenRows.length} 个 Token 执行 Workers 友好的 NSFW 批处理，是否继续？`, '开始');
+  const ok = await confirmAction(`将为当前 Token 池的 ${tokenRows.length} 个 Token 执行 Workers 友好的 NSFW 分批处理，是否继续？`, '开始');
   if (!ok) return;
-  startAsyncJob('nsfw', '/api/v1/admin/tokens/nsfw/enable/async', { all: true });
+  startChunkedJob('nsfw', '/api/v1/admin/tokens/nsfw/enable/async', tokenRows.map((row) => row.token));
 }
 
 function changePageSize() {
@@ -482,14 +506,8 @@ function goNextPage() {
   renderTable();
 }
 
-function openImportModal() {
-  document.getElementById('import-modal').classList.remove('hidden');
-}
-
-function closeImportModal() {
-  document.getElementById('import-modal').classList.add('hidden');
-  document.getElementById('import-text').value = '';
-}
+function openImportModal() { document.getElementById('import-modal').classList.remove('hidden'); }
+function closeImportModal() { document.getElementById('import-modal').classList.add('hidden'); document.getElementById('import-text').value = ''; }
 
 async function submitImport() {
   const pool = document.getElementById('import-pool').value || 'ssoBasic';
@@ -498,21 +516,9 @@ async function submitImport() {
   tokens.forEach((token) => {
     if (exists.has(token)) return;
     tokenRows.push({
-      token,
-      pool,
-      token_type: pool === 'ssoSuper' ? 'ssoSuper' : 'sso',
-      status: 'active',
-      raw_status: 'active',
-      quota: pool === 'ssoSuper' ? 140 : 80,
-      quota_known: true,
-      heavy_quota: pool === 'ssoSuper' ? 140 : -1,
-      heavy_quota_known: pool === 'ssoSuper',
-      note: '',
-      tags: [],
-      nsfw_enabled: false,
-      fail_count: 0,
-      use_count: 0,
-      _selected: false,
+      token, pool, token_type: pool === 'ssoSuper' ? 'ssoSuper' : 'sso', status: 'active', raw_status: 'active',
+      quota: pool === 'ssoSuper' ? 140 : 80, quota_known: true, heavy_quota: pool === 'ssoSuper' ? 140 : -1,
+      heavy_quota_known: pool === 'ssoSuper', note: '', tags: [], nsfw_enabled: false, fail_count: 0, use_count: 0, _selected: false,
     });
   });
   await syncAllTokens();
@@ -542,9 +548,7 @@ function openEditModal(token) {
   document.getElementById('edit-modal').classList.remove('hidden');
 }
 
-function closeEditModal() {
-  document.getElementById('edit-modal').classList.add('hidden');
-}
+function closeEditModal() { document.getElementById('edit-modal').classList.add('hidden'); }
 
 async function saveEdit() {
   const original = normalizeSsoToken(document.getElementById('edit-token-original').value);
@@ -569,21 +573,9 @@ async function saveEdit() {
     row.note = note;
   } else {
     tokenRows.unshift({
-      token,
-      pool,
-      token_type: pool === 'ssoSuper' ? 'ssoSuper' : 'sso',
-      status: 'active',
-      raw_status: 'active',
-      quota,
-      quota_known: true,
-      heavy_quota: pool === 'ssoSuper' ? quota : -1,
-      heavy_quota_known: pool === 'ssoSuper',
-      note,
-      tags: [],
-      nsfw_enabled: false,
-      fail_count: 0,
-      use_count: 0,
-      _selected: false,
+      token, pool, token_type: pool === 'ssoSuper' ? 'ssoSuper' : 'sso', status: 'active', raw_status: 'active',
+      quota, quota_known: true, heavy_quota: pool === 'ssoSuper' ? quota : -1, heavy_quota_known: pool === 'ssoSuper',
+      note, tags: [], nsfw_enabled: false, fail_count: 0, use_count: 0, _selected: false,
     });
   }
 
@@ -600,9 +592,7 @@ async function deleteSingleToken(token) {
   await loadData();
 }
 
-function addToken() {
-  openAddModal();
-}
+function addToken() { openAddModal(); }
 
 let confirmResolver = null;
 function confirmAction(message, okText = '确定') {
