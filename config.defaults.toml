@@ -27,8 +27,8 @@ refresh_interval_hours = 8
 fail_threshold = 5
 save_delay_ms = 500
 reload_interval_sec = 30
-nsfw_refresh_concurrency = 10
-nsfw_refresh_retries = 3
+nsfw_refresh_concurrency = 3
+nsfw_refresh_retries = 1
 
 [cache]
 enable_auto_clean = true
@@ -42,13 +42,15 @@ usage_max_concurrent = 25
 assets_delete_batch_size = 10
 admin_assets_batch_size = 10
 
+[video]
+upscale_timing = "complete"
+
 [register]
 worker_domain = ""
 email_domain = ""
 admin_password = ""
 yescaptcha_key = ""
 solver_url = "http://127.0.0.1:5072"
-# 推荐 camoufox（对 accounts.x.ai 的 Turnstile 成功率更高）；若环境未安装会自动回退到 chromium。
 solver_browser_type = "camoufox"
 solver_threads = 5
 register_threads = 10

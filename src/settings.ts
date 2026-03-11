@@ -18,7 +18,7 @@ export interface GrokSettings {
   proxy_pool_url?: string;
   proxy_pool_interval?: number;
   cache_proxy_url?: string;
-  cf_clearance?: string; // stored as VALUE only (no "cf_clearance=" prefix)
+  cf_clearance?: string;
   x_statsig_id?: string;
   dynamic_statsig?: boolean;
   filtered_tags?: string;
@@ -38,6 +38,8 @@ export interface TokenSettings {
   fail_threshold?: number;
   save_delay_ms?: number;
   reload_interval_sec?: number;
+  nsfw_refresh_concurrency?: number;
+  nsfw_refresh_retries?: number;
 }
 
 export interface CacheSettings {
@@ -52,6 +54,10 @@ export interface PerformanceSettings {
   usage_max_concurrent?: number;
   assets_delete_batch_size?: number;
   admin_assets_batch_size?: number;
+}
+
+export interface VideoSettings {
+  upscale_timing?: "single" | "complete";
 }
 
 export interface RegisterSettings {
@@ -76,6 +82,7 @@ export interface SettingsBundle {
   token: Required<TokenSettings>;
   cache: Required<CacheSettings>;
   performance: Required<PerformanceSettings>;
+  video: Required<VideoSettings>;
   register: Required<RegisterSettings>;
 }
 
@@ -114,6 +121,8 @@ const DEFAULTS: SettingsBundle = {
     fail_threshold: 5,
     save_delay_ms: 500,
     reload_interval_sec: 30,
+    nsfw_refresh_concurrency: 3,
+    nsfw_refresh_retries: 1,
   },
   cache: {
     enable_auto_clean: true,
@@ -126,6 +135,9 @@ const DEFAULTS: SettingsBundle = {
     usage_max_concurrent: 25,
     assets_delete_batch_size: 10,
     admin_assets_batch_size: 10,
+  },
+  video: {
+    upscale_timing: "complete",
   },
   register: {
     worker_domain: "",
@@ -185,65 +197,34 @@ export function normalizeImageGenerationMethod(value: unknown): string {
   return IMAGE_METHOD_LEGACY;
 }
 
-export async function getSettings(env: Env): Promise<SettingsBundle> {
-  const globalRow = await dbFirst<{ value: string }>(
-    env.DB,
-    "SELECT value FROM settings WHERE key = ?",
-    ["global"],
-  );
-  const grokRow = await dbFirst<{ value: string }>(
-    env.DB,
-    "SELECT value FROM settings WHERE key = ?",
-    ["grok"],
-  );
-  const tokenRow = await dbFirst<{ value: string }>(
-    env.DB,
-    "SELECT value FROM settings WHERE key = ?",
-    ["token"],
-  );
-  const cacheRow = await dbFirst<{ value: string }>(
-    env.DB,
-    "SELECT value FROM settings WHERE key = ?",
-    ["cache"],
-  );
-  const performanceRow = await dbFirst<{ value: string }>(
-    env.DB,
-    "SELECT value FROM settings WHERE key = ?",
-    ["performance"],
-  );
-  const registerRow = await dbFirst<{ value: string }>(
-    env.DB,
-    "SELECT value FROM settings WHERE key = ?",
-    ["register"],
-  );
+export function normalizeVideoUpscaleTiming(value: unknown): "single" | "complete" {
+  const candidate = String(value ?? "").trim().toLowerCase();
+  return candidate === "single" ? "single" : "complete";
+}
 
-  const globalCfg = globalRow?.value
-    ? safeParseJson<GlobalSettings>(globalRow.value, DEFAULTS.global)
-    : DEFAULTS.global;
-  const grokCfg = grokRow?.value
-    ? safeParseJson<GrokSettings>(grokRow.value, DEFAULTS.grok)
-    : DEFAULTS.grok;
-  const tokenCfg = tokenRow?.value
-    ? safeParseJson<TokenSettings>(tokenRow.value, DEFAULTS.token)
-    : DEFAULTS.token;
-  const cacheCfg = cacheRow?.value
-    ? safeParseJson<CacheSettings>(cacheRow.value, DEFAULTS.cache)
-    : DEFAULTS.cache;
-  const performanceCfg = performanceRow?.value
-    ? safeParseJson<PerformanceSettings>(performanceRow.value, DEFAULTS.performance)
-    : DEFAULTS.performance;
-  const registerCfg = registerRow?.value
-    ? safeParseJson<RegisterSettings>(registerRow.value, DEFAULTS.register)
-    : DEFAULTS.register;
+export async function getSettings(env: Env): Promise<SettingsBundle> {
+  const globalRow = await dbFirst<{ value: string }>(env.DB, "SELECT value FROM settings WHERE key = ?", ["global"]);
+  const grokRow = await dbFirst<{ value: string }>(env.DB, "SELECT value FROM settings WHERE key = ?", ["grok"]);
+  const tokenRow = await dbFirst<{ value: string }>(env.DB, "SELECT value FROM settings WHERE key = ?", ["token"]);
+  const cacheRow = await dbFirst<{ value: string }>(env.DB, "SELECT value FROM settings WHERE key = ?", ["cache"]);
+  const performanceRow = await dbFirst<{ value: string }>(env.DB, "SELECT value FROM settings WHERE key = ?", ["performance"]);
+  const videoRow = await dbFirst<{ value: string }>(env.DB, "SELECT value FROM settings WHERE key = ?", ["video"]);
+  const registerRow = await dbFirst<{ value: string }>(env.DB, "SELECT value FROM settings WHERE key = ?", ["register"]);
+
+  const globalCfg = globalRow?.value ? safeParseJson<GlobalSettings>(globalRow.value, DEFAULTS.global) : DEFAULTS.global;
+  const grokCfg = grokRow?.value ? safeParseJson<GrokSettings>(grokRow.value, DEFAULTS.grok) : DEFAULTS.grok;
+  const tokenCfg = tokenRow?.value ? safeParseJson<TokenSettings>(tokenRow.value, DEFAULTS.token) : DEFAULTS.token;
+  const cacheCfg = cacheRow?.value ? safeParseJson<CacheSettings>(cacheRow.value, DEFAULTS.cache) : DEFAULTS.cache;
+  const performanceCfg = performanceRow?.value ? safeParseJson<PerformanceSettings>(performanceRow.value, DEFAULTS.performance) : DEFAULTS.performance;
+  const videoCfg = videoRow?.value ? safeParseJson<VideoSettings>(videoRow.value, DEFAULTS.video) : DEFAULTS.video;
+  const registerCfg = registerRow?.value ? safeParseJson<RegisterSettings>(registerRow.value, DEFAULTS.register) : DEFAULTS.register;
 
   const mergedGrok = {
     ...DEFAULTS.grok,
     ...grokCfg,
     cf_clearance: stripCfPrefix(grokCfg.cf_clearance ?? ""),
   };
-  mergedGrok.image_generation_method = normalizeImageGenerationMethod(
-    mergedGrok.image_generation_method,
-  );
+  mergedGrok.image_generation_method = normalizeImageGenerationMethod(mergedGrok.image_generation_method);
 
   return {
     global: { ...DEFAULTS.global, ...globalCfg },
@@ -251,6 +232,7 @@ export async function getSettings(env: Env): Promise<SettingsBundle> {
     token: { ...DEFAULTS.token, ...tokenCfg },
     cache: { ...DEFAULTS.cache, ...cacheCfg },
     performance: { ...DEFAULTS.performance, ...performanceCfg },
+    video: { ...DEFAULTS.video, ...videoCfg, upscale_timing: normalizeVideoUpscaleTiming(videoCfg.upscale_timing) },
     register: { ...DEFAULTS.register, ...registerCfg },
   };
 }
@@ -263,6 +245,7 @@ export async function saveSettings(
     token_config?: TokenSettings;
     cache_config?: CacheSettings;
     performance_config?: PerformanceSettings;
+    video_config?: VideoSettings;
     register_config?: RegisterSettings;
   },
 ): Promise<void> {
@@ -279,37 +262,18 @@ export async function saveSettings(
   const nextToken: TokenSettings = { ...current.token, ...(updates.token_config ?? {}) };
   const nextCache: CacheSettings = { ...current.cache, ...(updates.cache_config ?? {}) };
   const nextPerformance: PerformanceSettings = { ...current.performance, ...(updates.performance_config ?? {}) };
+  const nextVideo: VideoSettings = {
+    ...current.video,
+    ...(updates.video_config ?? {}),
+    upscale_timing: normalizeVideoUpscaleTiming(updates.video_config?.upscale_timing ?? current.video.upscale_timing),
+  };
   const nextRegister: RegisterSettings = { ...current.register, ...(updates.register_config ?? {}) };
 
-  await dbRun(
-    env.DB,
-    "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-    ["global", JSON.stringify(nextGlobal), now],
-  );
-  await dbRun(
-    env.DB,
-    "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-    ["grok", JSON.stringify(nextGrok), now],
-  );
-  await dbRun(
-    env.DB,
-    "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-    ["token", JSON.stringify(nextToken), now],
-  );
-  await dbRun(
-    env.DB,
-    "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-    ["cache", JSON.stringify(nextCache), now],
-  );
-  await dbRun(
-    env.DB,
-    "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-    ["performance", JSON.stringify(nextPerformance), now],
-  );
-  await dbRun(
-    env.DB,
-    "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-    ["register", JSON.stringify(nextRegister), now],
-  );
+  await dbRun(env.DB, "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", ["global", JSON.stringify(nextGlobal), now]);
+  await dbRun(env.DB, "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", ["grok", JSON.stringify(nextGrok), now]);
+  await dbRun(env.DB, "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", ["token", JSON.stringify(nextToken), now]);
+  await dbRun(env.DB, "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", ["cache", JSON.stringify(nextCache), now]);
+  await dbRun(env.DB, "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", ["performance", JSON.stringify(nextPerformance), now]);
+  await dbRun(env.DB, "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", ["video", JSON.stringify(nextVideo), now]);
+  await dbRun(env.DB, "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", ["register", JSON.stringify(nextRegister), now]);
 }
-
