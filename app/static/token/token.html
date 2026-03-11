@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,280 +9,117 @@
   <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-mono/style.css" rel="stylesheet">
   <link href="/static/common/common.css?v=3" rel="stylesheet">
-  <link href="/static/token/token.css?v=12" rel="stylesheet">
+  <link href="/static/token/token.css?v=13" rel="stylesheet">
   <link href="/static/common/toast.css" rel="stylesheet">
+  <style>
+    .filter-tab.active { background: #111; color: #fff; }
+    .filter-tab { border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; font-size: 12px; }
+  </style>
 </head>
-
 <body class="min-h-screen flex flex-col" style="background-color: var(--bg);">
-
-  <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
   <div id="app-header"></div>
 
-  <!-- Main Content -->
-  <main class="space-y-6 flex-1 container mx-auto max-w-4xl px-6 py-8 fade-in">
-
+  <main class="space-y-6 flex-1 container mx-auto max-w-6xl px-6 py-8 fade-in">
     <div class="space-y-6">
       <div class="flex flex-wrap justify-between items-start gap-3">
         <div>
           <h2 class="text-2xl font-semibold tracking-tight">Token 列表</h2>
-          <p class="text-[var(--accents-4)] mt-1 text-sm">管理 Grok2API 的 Token 服务号池。</p>
-          <p class="text-[var(--accents-5)] mt-1 text-xs">NSFW 操作已在 Token 管理页启用；Cloudflare Worker 会自动按每批 20 个 Token 分段处理。</p>
+          <p class="text-[var(--accents-4)] mt-1 text-sm">已补齐 Workers 优先的批处理、分页、禁用状态、NSFW 统计与筛选。</p>
+          <p class="text-[var(--accents-5)] mt-1 text-xs">批量刷新/批量 NSFW 已切换到后台任务轮询，避免单次请求在 Cloudflare Workers 中超时。</p>
         </div>
-        <div class="flex items-center gap-3 w-full sm:w-auto">
-          <button onclick="openImportModal()" class="geist-button-outline gap-2">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="17 8 12 3 7 8"></polyline>
-              <line x1="12" y1="3" x2="12" y2="15"></line>
-            </svg>
-            导入
-          </button>
-          <button id="btn-refresh-nsfw-all" onclick="handleTokenNsfwAction(false)" class="geist-button-outline gap-2" title="为当前 Token 池分批执行 NSFW 开启">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <polyline points="1 20 1 14 7 14"></polyline>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-            </svg>
-            全量开启 NSFW
-          </button>
-          <button onclick="addToken()" class="geist-button gap-2">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            添加
-          </button>
+        <div class="flex flex-wrap items-center gap-2">
+          <button onclick="selectVisible()" class="geist-button-outline text-xs px-3">全选当前页</button>
+          <button onclick="selectFiltered()" class="geist-button-outline text-xs px-3">全选筛选结果</button>
+          <button onclick="clearSelection()" class="geist-button-outline text-xs px-3">清空选择</button>
+          <button onclick="openImportModal()" class="geist-button-outline text-xs px-3">导入</button>
+          <button onclick="startAllNsfw()" class="geist-button-outline text-xs px-3">全量开启 NSFW</button>
+          <button onclick="addToken()" class="geist-button text-xs px-3">添加</button>
         </div>
       </div>
 
-      <div class="h-px bg-[var(--border)] my-6"></div>
-
-      <!-- Statistics -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6" id="stats-container">
-        <!-- Row 1 -->
-        <div class="stat-card">
-          <div class="stat-value" id="stat-total">-</div>
-          <div class="stat-label">Token 总数</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value text-green-600" id="stat-active">-</div>
-          <div class="stat-label">Token 正常</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value text-orange-500" id="stat-cooling">-</div>
-          <div class="stat-label">Token 限流</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value text-red-600" id="stat-invalid">-</div>
-          <div class="stat-label">Token 失效</div>
-        </div>
-
-        <!-- Row 2 -->
-        <div class="stat-card">
-          <div class="stat-value" id="stat-chat-quota">-</div>
-          <div class="stat-label">Chat 剩余</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value text-blue-600" id="stat-image-quota">-</div>
-          <div class="stat-label">Image 剩余</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value text-gray-400" id="stat-video-quota">无法统计</div>
-          <div class="stat-label">Video 剩余</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="stat-total-calls">-</div>
-          <div class="stat-label">总调用次数</div>
-        </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        <div class="stat-card"><div class="stat-value" id="stat-total">-</div><div class="stat-label">Token 总数</div></div>
+        <div class="stat-card"><div class="stat-value text-green-600" id="stat-active">-</div><div class="stat-label">活跃</div></div>
+        <div class="stat-card"><div class="stat-value text-orange-500" id="stat-cooling">-</div><div class="stat-label">限流/耗尽</div></div>
+        <div class="stat-card"><div class="stat-value text-red-600" id="stat-invalid">-</div><div class="stat-label">失效/禁用</div></div>
+        <div class="stat-card"><div class="stat-value text-fuchsia-600" id="stat-nsfw">-</div><div class="stat-label">NSFW 已开启</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-chat-quota">-</div><div class="stat-label">Chat 剩余</div></div>
+        <div class="stat-card"><div class="stat-value text-blue-600" id="stat-image-quota">-</div><div class="stat-label">Image 剩余</div></div>
+        <div class="stat-card"><div class="stat-value text-gray-400">URL</div><div class="stat-label">Video 输出</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-total-calls">-</div><div class="stat-label">总调用次数</div></div>
       </div>
 
-      <div id="token-filter-bar"
-        class="token-filter-bar mb-4 bg-white border border-[var(--border)] rounded-lg px-4 py-3 flex flex-wrap items-center gap-4">
-        <div class="filter-group flex items-center gap-3">
-          <span class="text-xs text-[var(--accents-5)]">类型</span>
-          <label class="filter-chip">
-            <input type="checkbox" id="filter-type-sso" onchange="onFilterChange()">
-            <span>sso</span>
-          </label>
-          <label class="filter-chip">
-            <input type="checkbox" id="filter-type-supersso" onchange="onFilterChange()">
-            <span>supersso</span>
-          </label>
-        </div>
-        <div class="filter-group flex items-center gap-3">
-          <span class="text-xs text-[var(--accents-5)]">状态</span>
-          <label class="filter-chip">
-            <input type="checkbox" id="filter-status-active" onchange="onFilterChange()">
-            <span>活跃</span>
-          </label>
-          <label class="filter-chip">
-            <input type="checkbox" id="filter-status-invalid" onchange="onFilterChange()">
-            <span>失效</span>
-          </label>
-          <label class="filter-chip">
-            <input type="checkbox" id="filter-status-exhausted" onchange="onFilterChange()">
-            <span>额度用尽</span>
-          </label>
-        </div>
-        <div class="filter-summary ml-auto flex items-center gap-3">
-          <span class="text-xs text-[var(--accents-5)]">结果 <span id="filter-result-count">0</span></span>
-          <button onclick="resetFilters()" class="geist-button-outline text-xs px-3 h-7">清空筛选</button>
-        </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button class="filter-tab active" data-filter="all" onclick="setFilter('all')">全部 <span id="tab-count-all">0</span></button>
+        <button class="filter-tab" data-filter="active" onclick="setFilter('active')">活跃 <span id="tab-count-active">0</span></button>
+        <button class="filter-tab" data-filter="cooling" onclick="setFilter('cooling')">冷却 <span id="tab-count-cooling">0</span></button>
+        <button class="filter-tab" data-filter="exhausted" onclick="setFilter('exhausted')">耗尽 <span id="tab-count-exhausted">0</span></button>
+        <button class="filter-tab" data-filter="invalid" onclick="setFilter('invalid')">失效 <span id="tab-count-invalid">0</span></button>
+        <button class="filter-tab" data-filter="disabled" onclick="setFilter('disabled')">禁用 <span id="tab-count-disabled">0</span></button>
+        <button class="filter-tab" data-filter="nsfw" onclick="setFilter('nsfw')">NSFW <span id="tab-count-nsfw">0</span></button>
+        <button class="filter-tab" data-filter="no-nsfw" onclick="setFilter('no-nsfw')">未开启 NSFW <span id="tab-count-no-nsfw">0</span></button>
       </div>
 
-      <!-- Token Table -->
-      <div class="rounded-lg overflow-hidden bg-white mb-4 overflow-x-auto">
-        <table class="geist-table min-w-[800px]">
+      <div class="rounded-lg overflow-hidden bg-white overflow-x-auto">
+        <table class="geist-table min-w-[1000px]">
           <thead>
             <tr>
               <th class="w-10"><input type="checkbox" id="select-all" class="checkbox" onclick="toggleSelectAll()"></th>
               <th class="w-48 text-left">Token</th>
               <th class="w-24">类型</th>
               <th class="w-24">状态</th>
+              <th class="w-48 text-left">标签</th>
               <th class="w-20">额度</th>
               <th class="text-left">备注</th>
-              <th class="w-32 text-center">操作</th>
+              <th class="w-56 text-center">操作</th>
             </tr>
           </thead>
-          <tbody id="token-table-body">
-            <!-- Dynamic Rows -->
-          </tbody>
+          <tbody id="token-table-body"></tbody>
         </table>
-        <div id="loading" class="text-center py-12 text-[var(--accents-4)]">加载中...</div>
-        <div id="empty-state" class="hidden text-center py-12 text-[var(--accents-4)]">
-          暂无 Token，请点击右上角导入或添加。
-        </div>
+        <div id="empty-state" class="hidden text-center py-12 text-[var(--accents-4)]">暂无数据</div>
       </div>
 
-      <!-- Batch Actions Bar (Floating Bottom) -->
-
+      <div class="flex items-center justify-between gap-3 text-sm text-[var(--accents-5)]">
+        <div id="pagination-info">无数据</div>
+        <div class="flex items-center gap-2">
+          <select id="page-size" class="geist-input h-8 text-xs" onchange="changePageSize()"></select>
+          <button id="page-prev" onclick="goPrevPage()" class="geist-button-outline text-xs px-3">上一页</button>
+          <button id="page-next" onclick="goNextPage()" class="geist-button-outline text-xs px-3">下一页</button>
+        </div>
+      </div>
     </div>
   </main>
+
   <div id="app-footer"></div>
 
-  <!-- Batch Actions Bar (Floating Bottom) -->
-  <div id="batch-actions"
-    class="fixed bottom-8 left-1/2 -translate-x-1/2 z-20 bg-white border border-[var(--border)] rounded-full px-3 py-2 flex items-center shadow-lg gap-3 cursor-move select-none active:cursor-grabbing whitespace-nowrap">
-    <div class="batch-actions-meta text-sm font-medium flex items-center gap-2">
+  <div id="batch-actions" class="fixed bottom-8 left-1/2 -translate-x-1/2 z-20 bg-white border border-[var(--border)] rounded-full px-4 py-2 flex items-center shadow-lg gap-3 whitespace-nowrap">
+    <div class="text-sm font-medium flex items-center gap-2">
       <span class="text-[var(--accents-5)] text-xs">已选择</span>
-      <span class="bg-black text-white text-xs px-1.5 py-0.5 rounded-full" id="selected-count">0</span>
+      <span class="bg-black text-white text-xs px-2 py-0.5 rounded-full" id="selected-count">0</span>
       <span class="text-[var(--accents-5)] text-xs">项</span>
     </div>
     <span class="toolbar-sep"></span>
-    <div class="batch-actions-buttons flex items-center gap-1">
-      <button id="btn-batch-export" onclick="batchExport()"
-        class="geist-button-outline text-xs px-3 gap-1 border-0 hover:bg-gray-100">
-        导出
-      </button>
-      <button id="btn-batch-update" onclick="batchUpdate()"
-        class="geist-button-outline text-xs px-3 gap-1 border-0 hover:bg-gray-100 justify-center">
-        刷新
-      </button>
-      <button id="btn-batch-nsfw" onclick="handleTokenNsfwAction(true)"
-        class="geist-button-outline text-xs px-3 gap-1 border-0 hover:bg-gray-100 justify-center">
-        NSFW
-      </button>
-      <button id="btn-batch-delete" onclick="batchDelete()" class="geist-button-danger text-xs px-3">
-        删除
-      </button>
+    <div class="flex items-center gap-1">
+      <button id="btn-batch-export" onclick="batchExport()" class="geist-button-outline text-xs px-3">导出</button>
+      <button id="btn-batch-refresh" onclick="batchRefresh()" class="geist-button-outline text-xs px-3">刷新</button>
+      <button id="btn-batch-disable" onclick="setSelectedStatus('disabled')" class="geist-button-outline text-xs px-3">禁用</button>
+      <button id="btn-batch-enable" onclick="setSelectedStatus('active')" class="geist-button-outline text-xs px-3">启用</button>
+      <button id="btn-batch-nsfw" onclick="batchNsfw()" class="geist-button-outline text-xs px-3">NSFW</button>
+      <button id="btn-batch-delete" onclick="batchDelete()" class="geist-button-danger text-xs px-3">删除</button>
     </div>
     <div id="batch-progress" class="hidden text-xs text-[var(--accents-5)] flex items-center gap-2">
       <span class="toolbar-sep"></span>
       <span id="batch-progress-text"></span>
-      <button id="btn-pause-action" type="button" class="batch-link hidden" onclick="toggleBatchPause()">暂停</button>
-      <button id="btn-stop-action" type="button" class="batch-link hidden" onclick="stopBatchRefresh()">终止</button>
+      <button id="btn-stop-action" type="button" class="batch-link" onclick="cancelCurrentJob()">取消任务</button>
     </div>
   </div>
 
-
-  <!-- Add Modal -->
-  <div id="add-modal" class="modal-overlay hidden">
-    <div class="modal-content modal-lg" id="add-modal-content">
-      <div class="modal-header">
-        <h3 class="modal-title">添加 Token</h3>
-        <button onclick="closeAddModal()" class="modal-close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-      </div>
-
-      <div class="tab-header">
-        <button id="tab-btn-manual" class="tab-btn active" onclick="switchAddTab('manual')">手动添加</button>
-        <button id="tab-btn-auto" class="tab-btn" onclick="switchAddTab('auto')">自动注册</button>
-      </div>
-
-      <div id="add-tab-manual" class="tab-panel">
-        <div class="space-y-4">
-          <div>
-            <label class="modal-label mb-1 block">Token</label>
-            <input type="text" id="add-token-input" class="geist-input font-mono" placeholder="sso=..." />
-          </div>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label class="modal-label mb-1 block">类型</label>
-              <select id="add-token-pool" class="geist-input">
-                <option value="ssoBasic">ssoBasic</option>
-                <option value="ssoSuper">ssoSuper</option>
-              </select>
-            </div>
-            <div>
-              <label class="modal-label mb-1 block">额度</label>
-              <input type="number" id="add-token-quota" class="geist-input" min="0" value="80" />
-            </div>
-          </div>
-          <div>
-            <label class="modal-label mb-1 block">备注</label>
-            <input type="text" id="add-token-note" class="geist-input" placeholder="可选备注" maxlength="50" />
-          </div>
-          <div class="flex justify-end gap-2 pt-2">
-            <button onclick="closeAddModal()" class="geist-button-outline text-xs px-3">取消</button>
-            <button onclick="submitManualAdd()" class="geist-button text-xs px-3">添加</button>
-          </div>
-        </div>
-      </div>
-
-      <div id="add-tab-auto" class="tab-panel hidden">
-        <div class="space-y-4">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label class="modal-label mb-1 block">注册数量</label>
-              <input type="number" id="auto-register-count" class="geist-input" min="1" placeholder="默认 100" />
-            </div>
-            <div>
-              <label class="modal-label mb-1 block">并发数量</label>
-              <input type="number" id="auto-register-concurrency" class="geist-input" min="1" value="10" />
-            </div>
-          </div>
-          <div class="text-xs text-[var(--accents-5)]">
-            本地/Docker：可自动启动本地 Turnstile Solver（默认 5 线程）。Cloudflare：需配置 YesCaptcha 或公网 Solver，且 accounts.x.ai 可能触发 Cloudflare Challenge 导致失败。
-          </div>
-          <div id="auto-register-status" class="text-xs text-[var(--accents-5)] hidden"></div>
-          <pre id="auto-register-logs"
-            class="hidden text-xs font-mono whitespace-pre-wrap bg-[var(--accents-1)] border border-[var(--border)] rounded-md p-2 max-h-40 overflow-auto"></pre>
-          <div class="flex justify-end gap-2 pt-2">
-            <button onclick="closeAddModal()" class="geist-button-outline text-xs px-3">取消</button>
-            <button id="auto-register-stop-btn" onclick="stopAutoRegister()" class="geist-button-danger text-xs px-3 hidden">停止</button>
-            <button id="auto-register-btn" onclick="startAutoRegister()" class="geist-button text-xs px-3">开始注册</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Import Modal -->
   <div id="import-modal" class="modal-overlay hidden">
-    <div class="modal-content modal-lg" id="import-modal-content">
+    <div class="modal-content modal-lg">
       <div class="modal-header">
         <h3 class="modal-title">批量导入 Token</h3>
-        <button onclick="closeImportModal()" class="modal-close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
+        <button onclick="closeImportModal()" class="modal-close">×</button>
       </div>
       <div class="space-y-4">
         <div>
@@ -295,8 +131,7 @@
         </div>
         <div>
           <label class="modal-label mb-1 block">Token 列表（每行一个）</label>
-          <textarea id="import-text" class="geist-input font-mono h-48"
-            placeholder="粘贴 Token，一行一个..."></textarea>
+          <textarea id="import-text" class="geist-input font-mono h-48" placeholder="一行一个 Token"></textarea>
         </div>
         <div class="flex justify-end gap-2 pt-2">
           <button onclick="closeImportModal()" class="geist-button-outline text-xs px-3">取消</button>
@@ -306,25 +141,17 @@
     </div>
   </div>
 
-  <!-- Edit Modal -->
   <div id="edit-modal" class="modal-overlay hidden">
-    <div class="modal-content modal-md" id="edit-modal-content">
+    <div class="modal-content modal-md">
       <div class="modal-header">
-        <h3 class="modal-title">编辑 Token</h3>
-        <button onclick="closeEditModal()" class="modal-close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
+        <h3 id="edit-modal-title" class="modal-title">编辑 Token</h3>
+        <button onclick="closeEditModal()" class="modal-close">×</button>
       </div>
       <div class="space-y-4">
-        <input type="hidden" id="edit-original-token">
-        <input type="hidden" id="edit-original-pool">
+        <input type="hidden" id="edit-token-original">
         <div>
           <label class="modal-label mb-1 block">Token</label>
-          <input type="text" id="edit-token-display" class="geist-input font-mono bg-gray-50 text-gray-500"
-            disabled>
+          <input type="text" id="edit-token" class="geist-input font-mono" placeholder="sso=...">
         </div>
         <div>
           <label class="modal-label mb-1 block">类型</label>
@@ -335,11 +162,11 @@
         </div>
         <div>
           <label class="modal-label mb-1 block">额度</label>
-          <input type="number" id="edit-quota" class="geist-input" min="0">
+          <input type="number" id="edit-quota" class="geist-input" min="-1">
         </div>
         <div>
           <label class="modal-label mb-1 block">备注</label>
-          <input type="text" id="edit-note" class="geist-input" placeholder="可选备注" maxlength="50">
+          <input type="text" id="edit-note" class="geist-input" placeholder="可选备注" maxlength="80">
         </div>
         <div class="flex justify-end gap-2 pt-2">
           <button onclick="closeEditModal()" class="geist-button-outline text-xs px-3">取消</button>
@@ -349,397 +176,23 @@
     </div>
   </div>
 
-  <div id="confirm-dialog" class="modal-overlay confirm-dialog hidden">
+  <div id="confirm-dialog" class="modal-overlay hidden">
     <div class="modal-content modal-md">
       <div class="confirm-dialog-body">
         <div class="confirm-dialog-title">请确认</div>
         <div id="confirm-message" class="confirm-dialog-message"></div>
         <div class="confirm-dialog-actions">
-          <button id="confirm-cancel" type="button" class="geist-button-outline text-xs px-3">取消</button>
-          <button id="confirm-ok" type="button" class="geist-button-danger text-xs px-3">确定</button>
+          <button type="button" class="geist-button-outline text-xs px-3" onclick="closeConfirm(false)">取消</button>
+          <button id="confirm-ok" type="button" class="geist-button-danger text-xs px-3" onclick="closeConfirm(true)">确定</button>
         </div>
       </div>
     </div>
   </div>
 
-  <script src="/static/common/draggable.js"></script>
   <script src="/static/common/admin-auth.js?v=3"></script>
   <script src="/static/common/header.js?v=4"></script>
   <script src="/static/common/footer.js?v=1"></script>
   <script src="/static/common/toast.js"></script>
-  <script src="/static/token/token.js?v=15"></script>
-  <script>
-    const NSFW_UI_BATCH_LIMIT = 20;
-    let tokenMetaRefreshPromise = null;
-
-    function forceEnableTokenNsfwButtons() {
-      ['btn-refresh-nsfw-all', 'btn-batch-nsfw'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.classList.remove('hidden');
-        el.style.setProperty('display', 'inline-flex', 'important');
-      });
-    }
-
-    function normalizeTokenForNsfw(value) {
-      if (typeof normalizeSsoToken === 'function') {
-        return normalizeSsoToken(value);
-      }
-      const raw = String(value || '').trim();
-      return raw.startsWith('sso=') ? raw.slice(4).trim() : raw;
-    }
-
-    function resolveNsfwButtonTarget(buttonTarget) {
-      if (!buttonTarget) return null;
-      if (typeof buttonTarget === 'string') return document.getElementById(buttonTarget);
-      return buttonTarget;
-    }
-
-    function normalizeTagList(tags) {
-      if (!Array.isArray(tags)) return [];
-      const seen = new Set();
-      const normalized = [];
-      tags.forEach((tag) => {
-        const value = String(tag || '').trim();
-        if (!value || seen.has(value)) return;
-        seen.add(value);
-        normalized.push(value);
-      });
-      return normalized;
-    }
-
-    function hasNsfwTag(item) {
-      if (!item) return false;
-      const tags = normalizeTagList(item.tags);
-      return Boolean(item.nsfw_enabled) || tags.includes('nsfw');
-    }
-
-    function collectNsfwTargetTokens(selectedOnly) {
-      const rows = Array.isArray(flatTokens) ? flatTokens : [];
-      const source = selectedOnly ? rows.filter((item) => item && item._selected) : rows;
-      const seen = new Set();
-      const tokens = [];
-      source.forEach((item) => {
-        const token = normalizeTokenForNsfw(item && item.token);
-        if (!token || seen.has(token)) return;
-        seen.add(token);
-        tokens.push(token);
-      });
-      return tokens;
-    }
-
-    async function confirmNsfwAction(message, okText) {
-      if (typeof confirmAction === 'function') {
-        return confirmAction(message, { okText });
-      }
-      return window.confirm(message);
-    }
-
-    async function runNsfwBatches(tokens, buttonTarget) {
-      const uniqueTokens = Array.from(new Set((tokens || []).map(normalizeTokenForNsfw).filter(Boolean)));
-      if (!uniqueTokens.length) {
-        if (typeof showToast === 'function') showToast('没有可处理的 Token', 'error');
-        return;
-      }
-      if (!apiKey) {
-        if (typeof showToast === 'function') showToast('管理员会话已失效，请重新登录', 'error');
-        return;
-      }
-
-      const btn = resolveNsfwButtonTarget(buttonTarget);
-      const originalHtml = btn ? btn.innerHTML : '';
-      if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '处理中...';
-      }
-
-      let success = 0;
-      let failed = 0;
-      const failedTokens = [];
-
-      try {
-        for (let i = 0; i < uniqueTokens.length; i += NSFW_UI_BATCH_LIMIT) {
-          const chunk = uniqueTokens.slice(i, i + NSFW_UI_BATCH_LIMIT);
-          if (btn) {
-            btn.innerHTML = `NSFW ${Math.min(i + chunk.length, uniqueTokens.length)}/${uniqueTokens.length}`;
-          }
-
-          const headers = typeof buildAuthHeaders === 'function'
-            ? buildAuthHeaders(apiKey)
-            : { Authorization: `Bearer ${apiKey}` };
-          const response = await fetch('/api/v1/admin/tokens/nsfw/enable', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...headers,
-            },
-            body: JSON.stringify({
-              tokens: chunk,
-              concurrency: Math.min(3, chunk.length),
-              retries: 1,
-            }),
-          });
-
-          const payload = typeof parseJsonSafely === 'function'
-            ? await parseJsonSafely(response)
-            : await response.json().catch(() => null);
-
-          if (!response.ok) {
-            const message = typeof extractApiErrorMessage === 'function'
-              ? extractApiErrorMessage(payload, `第 ${Math.floor(i / NSFW_UI_BATCH_LIMIT) + 1} 批处理失败`)
-              : `第 ${Math.floor(i / NSFW_UI_BATCH_LIMIT) + 1} 批处理失败`;
-            throw new Error(message);
-          }
-
-          const summary = payload && payload.summary ? payload.summary : {};
-          success += Number(summary.success || 0);
-          failed += Number(summary.failed || 0);
-          if (Array.isArray(payload && payload.failed)) {
-            payload.failed.forEach((item) => {
-              if (item && item.token) failedTokens.push(String(item.token));
-            });
-          }
-        }
-
-        const failedPreview = failedTokens.length
-          ? `，失败 Token：${failedTokens.slice(0, 5).join('、')}${failedTokens.length > 5 ? ' 等' : ''}`
-          : '';
-        if (typeof showToast === 'function') {
-          showToast(
-            `NSFW 处理完成：总计 ${uniqueTokens.length}，成功 ${success}，失败 ${failed}${failedPreview}`,
-            failed > 0 ? 'info' : 'success',
-          );
-        }
-        if (typeof loadData === 'function') await loadData();
-      } catch (error) {
-        if (typeof showToast === 'function') {
-          showToast(`NSFW 处理失败：${error instanceof Error ? error.message : String(error)}`, 'error');
-        }
-      } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.innerHTML = originalHtml;
-        }
-      }
-    }
-
-    async function handleTokenNsfwAction(selectedOnly) {
-      const tokens = collectNsfwTargetTokens(Boolean(selectedOnly));
-      if (!tokens.length) {
-        if (typeof showToast === 'function') {
-          showToast(selectedOnly ? '请先勾选要处理的 Token' : '当前没有可处理的 Token', 'error');
-        }
-        return;
-      }
-
-      const scopeText = selectedOnly ? `选中的 ${tokens.length} 个 Token` : `全部 ${tokens.length} 个 Token`;
-      const ok = await confirmNsfwAction(
-        `将为${scopeText}依次执行：同意协议 + 设置年龄 + 开启 NSFW。Cloudflare Worker 会自动按每批 ${NSFW_UI_BATCH_LIMIT} 个 Token 分段处理，是否继续？`,
-        '开始处理',
-      );
-      if (!ok) return;
-
-      await runNsfwBatches(tokens, selectedOnly ? 'btn-batch-nsfw' : 'btn-refresh-nsfw-all');
-    }
-
-    async function handleSingleTokenNsfw(token, buttonEl) {
-      const normalized = normalizeTokenForNsfw(token);
-      if (!normalized) {
-        if (typeof showToast === 'function') showToast('Token 无效', 'error');
-        return;
-      }
-      const ok = await confirmNsfwAction(
-        `将对该 Token 执行：同意协议 + 设置年龄 + 开启 NSFW，是否继续？`,
-        '开启 NSFW',
-      );
-      if (!ok) return;
-      await runNsfwBatches([normalized], buttonEl);
-    }
-
-    function buildTokenTagHtml(item) {
-      const tags = normalizeTagList(item && item.tags);
-      const pills = [];
-      if (hasNsfwTag(item)) {
-        pills.push('<span class="badge badge-green">NSFW</span>');
-      } else {
-        pills.push('<span class="badge badge-gray">未开启</span>');
-      }
-      tags
-        .filter((tag) => tag !== 'nsfw')
-        .forEach((tag) => pills.push(`<span class="badge badge-gray">${escapeHtml(tag)}</span>`));
-      return `<div class="flex flex-wrap items-center gap-1">${pills.join('')}</div>`;
-    }
-
-    function ensureTokenTagHeader() {
-      const headerRow = document.querySelector('.geist-table thead tr');
-      if (!headerRow) return;
-      let header = headerRow.querySelector('th[data-token-tags-col="1"]');
-      if (!header) {
-        header = document.createElement('th');
-        header.setAttribute('data-token-tags-col', '1');
-        header.className = 'w-32 text-left';
-        header.textContent = '标签';
-        const noteHeader = headerRow.children[5];
-        if (noteHeader) headerRow.insertBefore(header, noteHeader);
-        else headerRow.appendChild(header);
-      }
-    }
-
-    function buildRowNsfwButton(item) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.setAttribute('data-token-nsfw-action', '1');
-      button.className = 'px-2 py-1 text-[11px] rounded border transition-colors';
-      if (hasNsfwTag(item)) {
-        button.classList.add('border-green-200', 'text-green-700', 'bg-green-50', 'hover:bg-green-100');
-        button.textContent = '已开NSFW';
-        button.title = '重新执行 NSFW 刷新';
-      } else {
-        button.classList.add('border-gray-200', 'text-gray-600', 'hover:text-black', 'hover:border-gray-300', 'bg-white');
-        button.textContent = '开NSFW';
-        button.title = '为该 Token 开启 NSFW';
-      }
-      button.addEventListener('click', () => handleSingleTokenNsfw(item && item.token, button));
-      return button;
-    }
-
-    function enhanceTokenTableRows() {
-      const tbody = document.getElementById('token-table-body');
-      if (!tbody) return;
-      const rows = Array.from(tbody.querySelectorAll('tr'));
-      rows.forEach((tr, index) => {
-        const item = Array.isArray(displayTokens) ? displayTokens[index] : null;
-        if (!item) return;
-
-        let tagCell = tr.querySelector('td[data-token-tags-cell="1"]');
-        if (!tagCell) {
-          tagCell = document.createElement('td');
-          tagCell.setAttribute('data-token-tags-cell', '1');
-          tagCell.className = 'text-left';
-          const noteCell = tr.children[5];
-          if (noteCell) tr.insertBefore(tagCell, noteCell);
-          else tr.appendChild(tagCell);
-        }
-        tagCell.innerHTML = buildTokenTagHtml(item);
-
-        const actionsCell = tr.lastElementChild;
-        const actionsWrap = actionsCell ? actionsCell.querySelector('div') : null;
-        if (!actionsWrap) return;
-        const existingButton = actionsWrap.querySelector('button[data-token-nsfw-action="1"]');
-        const newButton = buildRowNsfwButton(item);
-        if (existingButton) existingButton.replaceWith(newButton);
-        else actionsWrap.appendChild(newButton);
-      });
-    }
-
-    function enhanceTokenTableUi() {
-      ensureTokenTagHeader();
-      enhanceTokenTableRows();
-    }
-
-    async function refreshTokenMetaFromApi(force = false) {
-      if (tokenMetaRefreshPromise && !force) return tokenMetaRefreshPromise;
-      tokenMetaRefreshPromise = (async () => {
-        if (!apiKey) return;
-        const headers = typeof buildAuthHeaders === 'function'
-          ? buildAuthHeaders(apiKey)
-          : { Authorization: `Bearer ${apiKey}` };
-        const response = await fetch('/api/tokens', {
-          headers,
-          cache: 'no-store',
-        });
-        if (!response.ok) return;
-        const payload = typeof parseJsonSafely === 'function'
-          ? await parseJsonSafely(response)
-          : await response.json().catch(() => null);
-        const rows = Array.isArray(payload && payload.data) ? payload.data : [];
-        const metaByToken = new Map(
-          rows.map((row) => [normalizeTokenForNsfw(row && row.token), row || {}]),
-        );
-        if (!Array.isArray(flatTokens)) return;
-        flatTokens.forEach((item) => {
-          const meta = metaByToken.get(normalizeTokenForNsfw(item && item.token));
-          if (!meta) return;
-          item.tags = normalizeTagList(meta.tags);
-          item.nsfw_enabled = item.tags.includes('nsfw');
-        });
-        enhanceTokenTableUi();
-      })().finally(() => {
-        tokenMetaRefreshPromise = null;
-      });
-      return tokenMetaRefreshPromise;
-    }
-
-    function patchNormalizeTokenRecord() {
-      if (typeof window.normalizeTokenRecord !== 'function' || window.normalizeTokenRecord.__nsfwMetaPatched) return;
-      const original = window.normalizeTokenRecord;
-      const patched = function(pool, raw) {
-        const row = original(pool, raw);
-        if (!row) return row;
-        const source = typeof raw === 'string' ? {} : (raw || {});
-        row.tags = normalizeTagList(source.tags);
-        row.nsfw_enabled = Boolean(source.nsfw_enabled) || row.tags.includes('nsfw');
-        return row;
-      };
-      patched.__nsfwMetaPatched = true;
-      window.normalizeTokenRecord = patched;
-    }
-
-    function patchRenderTable() {
-      if (typeof window.renderTable !== 'function' || window.renderTable.__nsfwUiPatched) return;
-      const original = window.renderTable;
-      const patched = function(...args) {
-        const result = original.apply(this, args);
-        enhanceTokenTableUi();
-        return result;
-      };
-      patched.__nsfwUiPatched = true;
-      window.renderTable = patched;
-    }
-
-    function patchLoadData() {
-      if (typeof window.loadData !== 'function' || window.loadData.__nsfwLoadPatched) return;
-      const original = window.loadData;
-      const patched = async function(...args) {
-        const result = await original.apply(this, args);
-        await refreshTokenMetaFromApi(true);
-        return result;
-      };
-      patched.__nsfwLoadPatched = true;
-      window.loadData = patched;
-    }
-
-    function patchSetActionButtonsState() {
-      if (typeof window.setActionButtonsState !== 'function' || window.setActionButtonsState.__nsfwStatePatched) return;
-      const original = window.setActionButtonsState;
-      const patched = function(...args) {
-        const result = original.apply(this, args);
-        const btn = document.getElementById('btn-batch-nsfw');
-        if (btn) {
-          const selectedCount = Array.isArray(flatTokens) ? flatTokens.filter((t) => t && t._selected).length : 0;
-          btn.disabled = Boolean(window.isBatchProcessing) || selectedCount === 0;
-        }
-        return result;
-      };
-      patched.__nsfwStatePatched = true;
-      window.setActionButtonsState = patched;
-    }
-
-    function initTokenNsfwEnhancements() {
-      patchNormalizeTokenRecord();
-      patchRenderTable();
-      patchLoadData();
-      patchSetActionButtonsState();
-      forceEnableTokenNsfwButtons();
-      enhanceTokenTableUi();
-    }
-
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', initTokenNsfwEnhancements);
-    } else {
-      initTokenNsfwEnhancements();
-    }
-  </script>
+  <script src="/static/token/token.js?v=16"></script>
 </body>
-
 </html>
