@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 
 <head>
@@ -15,19 +15,16 @@
 </head>
 
 <body class="min-h-screen flex flex-col" style="background-color: var(--bg);">
-
   <div id="app-header"></div>
-
   <main class="space-y-6 flex-1 container mx-auto max-w-4xl px-6 py-8 fade-in">
     <div class="space-y-6">
       <div class="flex flex-wrap justify-between items-start gap-3">
         <div>
           <h2 class="text-2xl font-semibold tracking-tight">配置管理</h2>
-          <p class="text-[var(--accents-4)] mt-1 text-sm">管理 API 密钥及系统参数设置。</p>
+          <p class="text-[var(--accents-4)] mt-1 text-sm">已切换到 Workers 优先的扩展配置接口，支持上游新增的视频设置与更稳的文本净化。</p>
         </div>
         <button onclick="saveConfig()" id="save-btn" class="geist-button gap-2 config-save-btn">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
             <polyline points="17 21 17 13 7 13 7 21" />
             <polyline points="7 3 7 8 15 8" />
@@ -35,22 +32,18 @@
           保存
         </button>
       </div>
-
       <div class="h-px bg-[var(--border)] my-6"></div>
-
       <div id="config-container" class="space-y-8">
         <div class="text-center py-12 text-[var(--accents-4)]">加载中...</div>
       </div>
-
     </div>
   </main>
   <div id="app-footer"></div>
-
   <script src="/static/common/admin-auth.js?v=3"></script>
   <script src="/static/common/header.js?v=4"></script>
   <script src="/static/common/footer.js?v=1"></script>
   <script src="/static/common/toast.js"></script>
-  <script src="/static/config/config.js?v=8"></script>
+  <script src="/static/config/config.js?v=9"></script>
 </body>
 
 </html>

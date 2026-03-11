@@ -3,6 +3,7 @@ import type { Env } from "./env";
 import { openAiRoutes } from "./routes/openai";
 import { mediaRoutes } from "./routes/media";
 import { adminRoutes } from "./routes/admin";
+import { adminParityRoutes } from "./routes/adminParity";
 import { accountSettingsRoutes } from "./routes/accountSettings";
 import { videoRoutes } from "./routes/videos";
 import { runKvDailyClear } from "./kv/cleanup";
@@ -58,8 +59,6 @@ async function fetchAsset(c: any, pathname: string): Promise<Response> {
     const res = await assets.fetch(new Request(url.toString(), c.req.raw));
     const extra: Record<string, string> = { "x-grok2api-build": buildSha };
 
-    // Avoid caching UI files aggressively, otherwise users may keep seeing old UI after redeploy.
-    // We keep images/videos cacheable (handled by KV + cache proxy paths), but HTML/JS/CSS should refresh quickly.
     const lower = pathname.toLowerCase();
     if (lower.endsWith(".html") || lower.endsWith(".js") || lower.endsWith(".css")) {
       extra["cache-control"] = "no-store, no-cache, must-revalidate";
@@ -88,18 +87,12 @@ app.route("/v1", videoRoutes);
 app.route("/", mediaRoutes);
 app.route("/", accountSettingsRoutes);
 app.route("/", adminRoutes);
+app.route("/", adminParityRoutes);
 
-// Backward-compatible local-cache viewer URLs used by the multi-page admin UI.
-// In Workers we serve cache via /images/*, so redirect /v1/files/* to /images/*.
-app.get("/v1/files/image/:imgPath{.+}", (c) =>
-  c.redirect(`/images/${encodeURIComponent(c.req.param("imgPath"))}`, 302),
-);
-app.get("/v1/files/video/:imgPath{.+}", (c) =>
-  c.redirect(`/images/${encodeURIComponent(c.req.param("imgPath"))}`, 302),
-);
+app.get("/v1/files/image/:imgPath{.+}", (c) => c.redirect(`/images/${encodeURIComponent(c.req.param("imgPath"))}`, 302));
+app.get("/v1/files/video/:imgPath{.+}", (c) => c.redirect(`/images/${encodeURIComponent(c.req.param("imgPath"))}`, 302));
 
 app.get("/_worker.js", (c) => c.notFound());
-
 app.get("/", (c) => c.redirect("/login", 302));
 
 app.get("/login", (c) => {
@@ -109,7 +102,6 @@ app.get("/login", (c) => {
   return fetchAsset(c, "/login/login.html");
 });
 
-// Legacy (old admin UI): keep /manage as an alias.
 app.get("/manage", (c) => {
   const buildSha = getBuildSha(c.env as Env);
   const v = c.req.query("v") ?? "";
@@ -192,11 +184,9 @@ app.get("/health", (c) =>
 app.notFound(async (c) => {
   const assets = getAssets(c.env as any);
   const buildSha = getBuildSha(c.env as Env);
-  // Avoid calling c.notFound() here because it will invoke this handler again.
   if (!assets) return withResponseHeaders(c.text("Not Found", 404), { "x-grok2api-build": buildSha });
   try {
     const res = await assets.fetch(c.req.raw);
-    // Keep the header consistent for debugging/version checks.
     return withResponseHeaders(res, { "x-grok2api-build": buildSha });
   } catch (err) {
     console.error("ASSETS fetch failed (notFound):", err);
